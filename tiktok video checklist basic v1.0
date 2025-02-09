@@ -1,0 +1,126 @@
+import React, { useState } from "react";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
+import { Checkbox } from "@/components/ui/checkbox";
+import { motion } from "framer-motion";
+
+export default function TikTokFeedbackApp() {
+  const [videoUrl, setVideoUrl] = useState("");
+  const [feedback, setFeedback] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const analyzeVideo = async () => {
+    if (!videoUrl) return;
+
+    setLoading(true);
+    try {
+      const response = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ videoUrl }),
+      });
+
+      const data = await response.json();
+      setFeedback(data);
+    } catch (error) {
+      console.error("Error analyzing video:", error);
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div className="flex flex-col items-center p-6 space-y-6">
+      <h1 className="text-2xl font-bold">TikTok Video Feedback</h1>
+      <Input
+        placeholder="Paste your TikTok video URL"
+        value={videoUrl}
+        onChange={(e) => setVideoUrl(e.target.value)}
+        className="w-full max-w-md"
+      />
+      <Button onClick={analyzeVideo} disabled={!videoUrl || loading}>
+        {loading ? "Analyzing..." : "Get Feedback"}
+      </Button>
+
+      {feedback && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="w-full max-w-md"
+        >
+          <Card>
+            <CardContent className="p-4">
+              <h2 className="text-lg font-semibold">Feedback</h2>
+              <p className="mt-2">Engagement Score: {feedback.engagementScore}%</p>
+              <Progress value={feedback.engagementScore} className="mt-2" />
+              <h3 className="mt-4 font-medium">Checklist:</h3>
+              <ul className="mt-2 space-y-2">
+                <li><Checkbox checked={feedback.checklist.hookInFirst3Sec} /> Uses a hook in the first 3 seconds</li>
+                <li><Checkbox checked={feedback.checklist.clearCTA} /> Has a clear CTA guiding users to complete the transaction</li>
+                <li><Checkbox checked={feedback.checklist.length10to25Sec} /> Video length is between 10-25 seconds</li>
+                <li><Checkbox checked={feedback.checklist.hasVoiceOver} /> Contains voice-over</li>
+                <li><Checkbox checked={feedback.checklist.hasSubtitles} /> Includes subtitles</li>
+                <li><Checkbox checked={feedback.checklist.hasRealPerson} /> Features a real person showing face</li>
+              </ul>
+              <h3 className="mt-4 font-medium">Recommendations:</h3>
+              <ul className="mt-2 list-disc list-inside">
+                {feedback.recommendations.map((rec, index) => (
+                  <li key={index}>{rec}</li>
+                ))}
+              </ul>
+            </CardContent>
+          </Card>
+        </motion.div>
+      )}
+    </div>
+  );
+}
+
+// Backend API for TikTok Analysis in Next.js
+import axios from "axios";
+
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  const { videoUrl } = req.body;
+  if (!videoUrl) {
+    return res.status(400).json({ error: "No video URL provided" });
+  }
+
+  try {
+    const videoId = videoUrl.split("/video/")[1];
+    const response = await axios.get(`https://open-api.tiktok.com/video/data/`, {
+      params: { video_id: videoId, client_key: process.env.TIKTOK_CLIENT_KEY },
+    });
+
+    if (!response.data || !response.data.data) {
+      return res.status(500).json({ error: "Failed to fetch video data" });
+    }
+
+    const videoData = response.data.data;
+    const analysis = {
+      engagementScore: videoData.stats.play_count > 5000 ? 85 : 60,
+      checklist: {
+        hookInFirst3Sec: videoData.description.includes("discount"),
+        clearCTA: videoData.description.includes("click"),
+        length10to25Sec: videoData.duration >= 10 && videoData.duration <= 25,
+        hasVoiceOver: videoData.has_voiceover,
+        hasSubtitles: videoData.has_subtitles,
+        hasRealPerson: videoData.has_real_person,
+      },
+      recommendations: [
+        !videoData.has_voiceover ? "Consider adding voice-over to boost engagement." : "",
+        !videoData.has_subtitles ? "Add subtitles for better accessibility." : "",
+        !videoData.has_real_person ? "Feature a real person to increase trust." : "",
+      ].filter(Boolean),
+    };
+
+    return res.json(analysis);
+  } catch (error) {
+    console.error("Error analyzing video:", error);
+    return res.status(500).json({ error: "Failed to analyze video" });
+  }
+}
