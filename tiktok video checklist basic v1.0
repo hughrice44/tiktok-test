@@ -77,8 +77,14 @@ export default function TikTokFeedbackApp() {
   );
 }
 
-// Backend API for TikTok Analysis in Next.js
+// Backend API for TikTok Analysis in Next.js with GPT, Speech-to-Text, and Computer Vision integration
 import axios from "axios";
+import OpenAI from "openai";
+import { Deepgram } from "@deepgram/sdk";
+import cv from "opencv4nodejs";
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const deepgram = new Deepgram(process.env.DEEPGRAM_API_KEY);
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -101,24 +107,37 @@ export default async function handler(req, res) {
     }
 
     const videoData = response.data.data;
-    const analysis = {
-      engagementScore: videoData.stats.play_count > 5000 ? 85 : 60,
-      checklist: {
-        hookInFirst3Sec: videoData.description.includes("discount"),
-        clearCTA: videoData.description.includes("click"),
-        length10to25Sec: videoData.duration >= 10 && videoData.duration <= 25,
-        hasVoiceOver: videoData.has_voiceover,
-        hasSubtitles: videoData.has_subtitles,
-        hasRealPerson: videoData.has_real_person,
-      },
-      recommendations: [
-        !videoData.has_voiceover ? "Consider adding voice-over to boost engagement." : "",
-        !videoData.has_subtitles ? "Add subtitles for better accessibility." : "",
-        !videoData.has_real_person ? "Feature a real person to increase trust." : "",
-      ].filter(Boolean),
-    };
+    const videoFrames = await axios.get(videoData.video_url, { responseType: "arraybuffer" });
+    const frameMat = cv.imdecode(Buffer.from(videoFrames.data));
+    const faceClassifier = new cv.CascadeClassifier(cv.HAAR_FRONTALFACE_ALT2);
+    const faces = faceClassifier.detectMultiScale(frameMat).objects;
+    const hasRealPerson = faces.length > 0;
 
-    return res.json(analysis);
+    const audioUrl = videoData.audio_url;
+    let transcript = "";
+    if (audioUrl) {
+      const audioResponse = await deepgram.transcription.preRecorded({
+        url: audioUrl,
+        punctuate: true,
+      });
+      transcript = audioResponse.results.channels[0].alternatives[0].transcript;
+    }
+
+    const prompt = `Analyze this TikTok video description: "${videoData.description}" and the following transcript: "${transcript}". Check if it contains a strong hook in the first 3 seconds, a clear CTA, and any indications of a real person. Return a checklist and recommendations.`;
+    
+    const gptResponse = await openai.chat.completions.create({
+      model: "gpt-4",
+      messages: [{ role: "system", content: prompt }],
+    });
+
+    const aiAnalysis = JSON.parse(gptResponse.choices[0].message.content);
+    aiAnalysis.checklist.hasRealPerson = hasRealPerson;
+
+    return res.json({
+      engagementScore: videoData.stats.play_count > 5000 ? 85 : 60,
+      checklist: aiAnalysis.checklist,
+      recommendations: aiAnalysis.recommendations,
+    });
   } catch (error) {
     console.error("Error analyzing video:", error);
     return res.status(500).json({ error: "Failed to analyze video" });
